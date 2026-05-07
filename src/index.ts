@@ -9,32 +9,20 @@ if (!API_KEY) {
   process.exit(1);
 }
 
-// ── Active glasses sessions ──────────────────────────────────────────────────
 const activeSessions = new Map<string, AppSession>();
 let latestText = "";
 
-function formatForGlasses(text: string): string {
+// Send text directly to glasses — no manual wrapping.
+// showTextWall handles rendering natively on the G1 display.
+// We only trim to the last ~500 chars so the display stays on recent text.
+function getDisplayText(text: string): string {
   if (!text || !text.trim()) return "GlassWriter\nReady to write.";
-  const recent = text.length > 280 ? "\u2026" + text.slice(-277) : text;
-  const words = recent.split(" ");
-  const lines: string[] = [];
-  let current = "";
-  for (const word of words) {
-    const candidate = current ? current + " " + word : word;
-    if (candidate.length > 28) {
-      if (current) lines.push(current);
-      current = word.length > 28 ? word.slice(0, 28) : word;
-    } else {
-      current = candidate;
-    }
-  }
-  if (current) lines.push(current);
-  return lines.slice(-5).join("\n");
+  return text.length > 500 ? "\u2026" + text.slice(-499) : text;
 }
 
 async function pushToSession(session: AppSession, text: string) {
   try {
-    await session.layouts.showTextWall(formatForGlasses(text));
+    await session.layouts.showTextWall(getDisplayText(text));
   } catch (_) {}
 }
 
@@ -45,19 +33,16 @@ async function broadcastText(text: string) {
   );
 }
 
-// ── App Server — AppServer extends Hono, so we add routes directly ───────────
 class GlassWriterServer extends AppServer {
   constructor(config: any) {
     super(config);
 
-    // CORS helper
     const cors = (c: any) => {
       c.header("Access-Control-Allow-Origin", "*");
       c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
       c.header("Access-Control-Allow-Headers", "Content-Type");
     };
 
-    // Health check — phone app polls this
     this.get("/ping", (c) => {
       cors(c);
       return c.json({
@@ -70,13 +55,8 @@ class GlassWriterServer extends AppServer {
       });
     });
 
-    // OPTIONS preflight
-    this.options("/text", (c) => {
-      cors(c);
-      return c.body(null, 204);
-    });
+    this.options("/text", (c) => { cors(c); return c.body(null, 204); });
 
-    // Receive text from phone app
     this.post("/text", async (c) => {
       cors(c);
       const body = await c.req.json().catch(() => ({}));
@@ -105,7 +85,6 @@ class GlassWriterServer extends AppServer {
   }
 }
 
-// ── Start with Bun.serve (required by SDK) ───────────────────────────────────
 const server = new GlassWriterServer({
   packageName: PACKAGE_NAME,
   apiKey: API_KEY,
