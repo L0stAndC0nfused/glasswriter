@@ -1,5 +1,6 @@
 {
-  "name": "mentraos-cloud-example-app",
+  "name": "glasswriter-server",
+  "type": "module",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
