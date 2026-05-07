@@ -1,6 +1,4 @@
 import { AppServer, AppSession } from "@mentra/sdk";
-import { createServer } from "http";
-import { IncomingMessage, ServerResponse } from "http";
 
 const PORT = parseInt(process.env.PORT || "3000");
 const PACKAGE_NAME = process.env.PACKAGE_NAME || "com.glasswriter.app";
@@ -15,7 +13,6 @@ if (!API_KEY) {
 const activeSessions = new Map<string, AppSession>();
 let latestText = "";
 
-// ── Format text for G1 display (28 chars per line, 5 lines max) ──────────────
 function formatForGlasses(text: string): string {
   if (!text || !text.trim()) return "GlassWriter\nReady to write.";
   const recent = text.length > 280 ? "\u2026" + text.slice(-277) : text;
@@ -48,8 +45,50 @@ async function broadcastText(text: string) {
   );
 }
 
-// ── MentraOS App ─────────────────────────────────────────────────────────────
+// ── App Server — AppServer extends Hono, so we add routes directly ───────────
 class GlassWriterServer extends AppServer {
+  constructor(config: any) {
+    super(config);
+
+    // CORS helper
+    const cors = (c: any) => {
+      c.header("Access-Control-Allow-Origin", "*");
+      c.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+      c.header("Access-Control-Allow-Headers", "Content-Type");
+    };
+
+    // Health check — phone app polls this
+    this.get("/ping", (c) => {
+      cors(c);
+      return c.json({
+        ok: true,
+        app: "GlassWriter",
+        sessions: activeSessions.size,
+        status: activeSessions.size > 0
+          ? `Glasses connected (${activeSessions.size})`
+          : "Waiting for glasses",
+      });
+    });
+
+    // OPTIONS preflight
+    this.options("/text", (c) => {
+      cors(c);
+      return c.body(null, 204);
+    });
+
+    // Receive text from phone app
+    this.post("/text", async (c) => {
+      cors(c);
+      const body = await c.req.json().catch(() => ({}));
+      const { text } = body;
+      if (typeof text !== "string") {
+        return c.json({ error: "text must be a string" }, 400);
+      }
+      await broadcastText(text);
+      return c.json({ ok: true, sessions: activeSessions.size });
+    });
+  }
+
   protected async onSession(
     session: AppSession,
     sessionId: string,
@@ -66,72 +105,27 @@ class GlassWriterServer extends AppServer {
   }
 }
 
-// ── HTTP bridge server (phone app talks to this) ─────────────────────────────
-const BRIDGE_PORT = PORT + 1;
-
-const bridge = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
-  if (req.method === "GET" && req.url === "/ping") {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
-      ok: true,
-      app: "GlassWriter",
-      sessions: activeSessions.size,
-      status: activeSessions.size > 0 ? `Glasses connected (${activeSessions.size})` : "Waiting for glasses",
-    }));
-    return;
-  }
-
-  if (req.method === "POST" && req.url === "/text") {
-    let body = "";
-    req.on("data", (chunk) => { body += chunk; });
-    req.on("end", async () => {
-      try {
-        const { text } = JSON.parse(body);
-        if (typeof text !== "string") throw new Error("text must be string");
-        await broadcastText(text);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: true, sessions: activeSessions.size }));
-      } catch (e) {
-        res.writeHead(400, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: String(e) }));
-      }
-    });
-    return;
-  }
-
-  res.writeHead(404);
-  res.end("Not found");
-});
-
-// ── Start both servers ───────────────────────────────────────────────────────
-const mentraServer = new GlassWriterServer({
+// ── Start with Bun.serve (required by SDK) ───────────────────────────────────
+const server = new GlassWriterServer({
   packageName: PACKAGE_NAME,
   apiKey: API_KEY,
   port: PORT,
 });
 
-mentraServer.start().then(() => {
-  bridge.listen(BRIDGE_PORT, () => {
-    console.log(`
-╔═════════════════════════════════════╗
-║      GlassWriter is LIVE 🟢         ║
-╠═════════════════════════════════════╣
-║  MentraOS webhook: port ${PORT}         ║
-║  Phone bridge:     port ${BRIDGE_PORT}         ║
-╚═════════════════════════════════════╝
-    `);
-  });
-}).catch((err) => {
-  console.error("[GlassWriter] Failed to start:", err);
-  process.exit(1);
+await server.start();
+
+Bun.serve({
+  port: PORT,
+  fetch: server.fetch,
 });
+
+console.log(`
+╔══════════════════════════════════════╗
+║      GlassWriter is LIVE 🟢          ║
+╠══════════════════════════════════════╣
+║  Port: ${PORT}                           ║
+║  /webhook → MentraOS glasses         ║
+║  /ping    → health check             ║
+║  /text    → receive typed text       ║
+╚══════════════════════════════════════╝
+`);
