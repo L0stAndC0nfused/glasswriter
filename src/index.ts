@@ -12,12 +12,47 @@ if (!API_KEY) {
 const activeSessions = new Map<string, AppSession>();
 let latestText = "";
 
-// Send text directly to glasses — no manual wrapping.
-// showTextWall handles rendering natively on the G1 display.
-// We only trim to the last ~500 chars so the display stays on recent text.
+// G1 display constants — measured from user testing
+const CHARS_PER_LINE = 52;
+const MAX_LINES = 5;
+
+// Wrap text at exactly CHARS_PER_LINE characters, then show only the last
+// MAX_LINES lines. This creates the "scrolling window" effect — as new lines
+// are added the top ones disappear, and if text is deleted it scrolls back up.
 function getDisplayText(text: string): string {
   if (!text || !text.trim()) return "GlassWriter\nReady to write.";
-  return text.length > 500 ? "\u2026" + text.slice(-499) : text;
+
+  // Word-wrap at CHARS_PER_LINE
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    // Handle words longer than the line width
+    if (word.length > CHARS_PER_LINE) {
+      if (current) { lines.push(current); current = ""; }
+      // Hard-break the long word
+      let remaining = word;
+      while (remaining.length > CHARS_PER_LINE) {
+        lines.push(remaining.slice(0, CHARS_PER_LINE));
+        remaining = remaining.slice(CHARS_PER_LINE);
+      }
+      current = remaining;
+      continue;
+    }
+
+    const candidate = current ? current + " " + word : word;
+    if (candidate.length > CHARS_PER_LINE) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+
+  // Show only the last MAX_LINES — this is the scrolling window
+  return lines.slice(-MAX_LINES).join("\n");
 }
 
 async function pushToSession(session: AppSession, text: string) {
@@ -102,9 +137,8 @@ console.log(`
 ╔══════════════════════════════════════╗
 ║      GlassWriter is LIVE 🟢          ║
 ╠══════════════════════════════════════╣
-║  Port: ${PORT}                           ║
-║  /webhook → MentraOS glasses         ║
-║  /ping    → health check             ║
-║  /text    → receive typed text       ║
+║  CHARS_PER_LINE : ${CHARS_PER_LINE}                 ║
+║  MAX_LINES      : ${MAX_LINES}                  ║
+║  Port           : ${PORT}                 ║
 ╚══════════════════════════════════════╝
 `);
