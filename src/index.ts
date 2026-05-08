@@ -1,72 +1,45 @@
-import { AppServer, AppSession } from "@mentra/sdk";
+#]import { AppServer, AppSession } from "@mentra/sdk";
 
 const PORT = parseInt(process.env.PORT || "3000");
 const PACKAGE_NAME = process.env.PACKAGE_NAME || "com.glasswriter.app";
 const API_KEY = process.env.MENTRAOS_API_KEY || "";
 
 if (!API_KEY) {
-  console.error("❌ MENTRAOS_API_KEY is not set");
+  console.error("MENTRAOS_API_KEY not set");
   process.exit(1);
 }
 
 const activeSessions = new Map<string, AppSession>();
 let latestText = "";
 
-// G1 display constants — measured from user testing
-const CHARS_PER_LINE = 69;
-const MAX_LINES = 5;
+const CHARS = 69;
+const LINES = 5;
 
-// Wrap text at exactly CHARS_PER_LINE characters, then show only the last
-// MAX_LINES lines. This creates the "scrolling window" effect — as new lines
-// are added the top ones disappear, and if text is deleted it scrolls back up.
-function getDisplayText(text: string): string {
-  if (!text || !text.trim()) return "GlassWriter\nReady to write.";
-
-  // Word-wrap at CHARS_PER_LINE
-  const words = text.split(" ");
-  const lines: string[] = [];
-  let current = "";
-
-  for (const word of words) {
-    // Only hard-break words that are longer than the full line width
-    if (word.length > CHARS_PER_LINE) {
-      if (current) { lines.push(current); current = ""; }
-      let remaining = word;
-      while (remaining.length > CHARS_PER_LINE) {
-        lines.push(remaining.slice(0, CHARS_PER_LINE));
-        remaining = remaining.slice(CHARS_PER_LINE);
-      }
-      current = remaining;
-      continue;
-    }
-
-    // Word fits on current line with a space?
-    const candidate = current ? current + " " + word : word;
-    if (candidate.length > CHARS_PER_LINE) {
-      // Word doesn't fit — push the current line and start a new one with this whole word
-      if (current) lines.push(current);
-      current = word;
+function wrap(text: string): string {
+  if (!text.trim()) return "GlassWriter\nReady to write.";
+  const result: string[] = [];
+  let line = "";
+  for (const word of text.split(" ")) {
+    if (!word) continue;
+    const next = line ? line + " " + word : word;
+    if (next.length <= CHARS) {
+      line = next;
     } else {
-      current = candidate;
+      if (line) result.push(line);
+      line = word;
     }
   }
-  if (current) lines.push(current);
-
-  // Show only the last MAX_LINES — this is the scrolling window
-  return lines.slice(-MAX_LINES).join("\n");
+  if (line) result.push(line);
+  return result.slice(-LINES).join("\n");
 }
 
-async function pushToSession(session: AppSession, text: string) {
-  try {
-    await session.layouts.showTextWall(getDisplayText(text));
-  } catch (_) {}
+async function push(session: AppSession, text: string) {
+  try { await session.layouts.showTextWall(wrap(text)); } catch (_) {}
 }
 
-async function broadcastText(text: string) {
+async function broadcast(text: string) {
   latestText = text;
-  await Promise.allSettled(
-    Array.from(activeSessions.values()).map((s) => pushToSession(s, text))
-  );
+  await Promise.allSettled([...activeSessions.values()].map(s => push(s, text)));
 }
 
 class GlassWriterServer extends AppServer {
@@ -81,14 +54,14 @@ class GlassWriterServer extends AppServer {
 
     this.get("/ping", (c) => {
       cors(c);
-      return c.json({
-        ok: true,
-        app: "GlassWriter",
-        sessions: activeSessions.size,
-        status: activeSessions.size > 0
-          ? `Glasses connected (${activeSessions.size})`
-          : "Waiting for glasses",
-      });
+      return c.json({ ok: true, sessions: activeSessions.size });
+    });
+
+    // Test endpoint — open in browser to verify wrapping
+    this.get("/test", (c) => {
+      cors(c);
+      const t = c.req.query("t") || "helo guys i am again testing the capabilites of this app to see if it can handle larger aspects";
+      return c.text(wrap(t));
     });
 
     this.options("/text", (c) => { cors(c); return c.body(null, 204); });
@@ -97,49 +70,24 @@ class GlassWriterServer extends AppServer {
       cors(c);
       const body = await c.req.json().catch(() => ({}));
       const { text } = body;
-      if (typeof text !== "string") {
-        return c.json({ error: "text must be a string" }, 400);
-      }
-      await broadcastText(text);
+      if (typeof text !== "string") return c.json({ error: "bad request" }, 400);
+      await broadcast(text);
       return c.json({ ok: true, sessions: activeSessions.size });
     });
   }
 
-  protected async onSession(
-    session: AppSession,
-    sessionId: string,
-    userId: string
-  ): Promise<void> {
-    console.log(`[GlassWriter] Connected: ${userId}`);
+  protected async onSession(session: AppSession, sessionId: string, userId: string) {
+    console.log("Connected:", userId);
     activeSessions.set(sessionId, session);
-    await pushToSession(session, latestText);
-
+    await push(session, latestText);
     session.events.onDisconnected(() => {
-      console.log(`[GlassWriter] Disconnected: ${sessionId}`);
+      console.log("Disconnected:", sessionId);
       activeSessions.delete(sessionId);
     });
   }
 }
 
-const server = new GlassWriterServer({
-  packageName: PACKAGE_NAME,
-  apiKey: API_KEY,
-  port: PORT,
-});
-
+const server = new GlassWriterServer({ packageName: PACKAGE_NAME, apiKey: API_KEY, port: PORT });
 await server.start();
-
-Bun.serve({
-  port: PORT,
-  fetch: server.fetch,
-});
-
-console.log(`
-╔══════════════════════════════════════╗
-║      GlassWriter is LIVE 🟢          ║
-╠══════════════════════════════════════╣
-║  CHARS_PER_LINE : ${CHARS_PER_LINE}                 ║
-║  MAX_LINES      : ${MAX_LINES}                  ║
-║  Port           : ${PORT}                 ║
-╚══════════════════════════════════════╝
-`);
+Bun.serve({ port: PORT, fetch: server.fetch });
+console.log("GlassWriter live on port", PORT, "| CHARS:", CHARS, "| LINES:", LINES);
