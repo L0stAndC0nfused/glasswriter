@@ -28,10 +28,9 @@ function getDisplayText(text: string): string {
   let current = "";
 
   for (const word of words) {
-    // Handle words longer than the line width
+    // Only hard-break words that are longer than the full line width
     if (word.length > CHARS_PER_LINE) {
       if (current) { lines.push(current); current = ""; }
-      // Hard-break the long word
       let remaining = word;
       while (remaining.length > CHARS_PER_LINE) {
         lines.push(remaining.slice(0, CHARS_PER_LINE));
@@ -41,9 +40,11 @@ function getDisplayText(text: string): string {
       continue;
     }
 
+    // Word fits on current line with a space?
     const candidate = current ? current + " " + word : word;
     if (candidate.length > CHARS_PER_LINE) {
-      lines.push(current);
+      // Word doesn't fit — push the current line and start a new one with this whole word
+      if (current) lines.push(current);
       current = word;
     } else {
       current = candidate;
