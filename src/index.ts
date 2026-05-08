@@ -13,7 +13,7 @@ const activeSessions = new Map<string, AppSession>();
 let latestText = "";
 
 // G1 display constants — measured from user testing
-const CHARS_PER_LINE = 52;
+const CHARS_PER_LINE = 69;
 const MAX_LINES = 5;
 
 // Wrap text at exactly CHARS_PER_LINE characters, then show only the last
