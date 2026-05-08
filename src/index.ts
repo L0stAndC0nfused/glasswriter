@@ -12,7 +12,7 @@ if (!API_KEY) {
 const activeSessions = new Map<string, AppSession>();
 let latestText = "";
 
-const CHARS_PER_LINE = 69;
+const CHARS_PER_LINE = 65;
 const MAX_LINES = 5;
 
 function getDisplayText(text: string): string {
